@@ -4,4 +4,5 @@ python-osc
 pyedflib
 antropy
 pylsl
+pyserial
 biotuner @ git+https://github.com/AntoineBellemare/biotuner.git
