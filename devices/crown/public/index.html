@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Hello World!</title>
+
+    <script type="module">
+        // navigator.bluetooth.getDevices()
+
+        import { Neurosity, WebBluetoothTransport } from "/@neurosity/sdk/dist/esm/neurosity.mjs";
+
+        const neurosity = new Neurosity({
+            autoSelectDevice: false,
+            bluetoothTransport: new WebBluetoothTransport({ autoConnect: false }),
+            streamingMode: "bluetooth-with-wifi-fallback"
+        });
+
+
+        neurosity.disconnect();
+
+        // status updates
+        neurosity.streamingState().subscribe((streamingState) => {
+            console.log("NEUROSITY-STREAMING-STATE", streamingState);
+        });
+
+        // bluetooth
+        const { bluetooth } = neurosity;
+
+        bluetooth.logs().subscribe((log) => {
+            console.log("BLUETOOTH-LOGS", log);
+        });
+
+        neurosity.brainwaves("rawUnfiltered").subscribe(brainwaves => {
+            console.log("NEUROSITY-BRAINWAVES", brainwaves);
+        });
+
+        // handle start button event
+        const startButton = document.getElementById("start");
+        startButton.addEventListener("click", async () => {
+            await bluetooth.transport.disconnect();
+            bluetooth.transport.connect()
+                .then(dev => console.log("connected to device", dev))
+                .catch(e => console.log(e.message));
+        });
+
+        // async functions
+        async function main() {
+            await neurosity.login({
+                email: "EMAIL",
+                password: "PASSWORD"
+            });
+        }
+
+        main();
+    </script>
+
+    <script nomodule src="/@neurosity/sdk/dist/browser/neurosity.js"></script>
+</head>
+
+<body>
+    <button id="start">Start</button>
+</body>
+
+</html>
