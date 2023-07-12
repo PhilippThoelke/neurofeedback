@@ -11,6 +11,8 @@ from antropy import lziv_complexity, spectral_entropy
 from scipy.signal import welch
 
 from neurofeedback.utils import (
+    Data,
+    DataType,
     Processor,
     bioelements_realtime,
     biotuner_realtime,
@@ -147,59 +149,43 @@ class PSD(Processor):
 
 
 class LempelZiv(Processor):
+    INPUT_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
+
     """
     Feature extractor for Lempel-Ziv complexity.
 
     Parameters:
         binarize_mode (str): the method to binarize the signal, can be "mean" or "median"
-        label (str): label under which to save the extracted feature
-        channels (Dict[str, List[str]]): channel list for each input stream
     """
 
     def __init__(
         self,
+        *input_addresses: str,
+        output_address: str = "lempel-ziv",
         binarize_mode: str = "mean",
-        label: str = "lempel-ziv",
-        channels: Dict[str, List[str]] = None,
+        **kwargs,
     ):
-        super(LempelZiv, self).__init__(label, channels)
-        assert binarize_mode in [
-            "mean",
-            "median",
-        ], "binarize_mode should be either mean or median"
-        self.binarize_mode = binarize_mode
-
-    def process(
-        self,
-        raw: np.ndarray,
-        info: mne.Info,
-        processed: Dict[str, float],
-        intermediates: Dict[str, np.ndarray],
-    ):
-        """
-        This function computes channel-wise Lempel-Ziv complexity on the binarized signal.
-
-        Parameters:
-            raw (np.ndarray): the raw EEG buffer with shape (Channels, Time)
-            info (mne.Info): info object containing e.g. channel names, sampling frequency, etc.
-            processed (Dict[str, float]): dictionary collecting extracted features
-            intermediates (Dict[str, np.ndarray]): dictionary containing intermediate representations
-
-        Returns:
-            features (Dict[str, float]): the extracted features from this processor
-        """
-        # binarize raw signal
-        if self.binarize_mode == "mean":
-            binarized = raw >= np.mean(raw, axis=-1, keepdims=True)
-        elif self.binarize_mode == "median":
-            binarized = raw >= np.median(raw, axis=-1, keepdims=True)
-
-        # compute Lempel-Ziv complexity
-        return {
-            self.label: np.mean(
-                [lziv_complexity(ch, normalize=True) for ch in binarized]
+        super().__init__(output_address, *input_addresses, **kwargs)
+        if binarize_mode == "mean":
+            self.binarize_fn = np.mean
+        elif binarize_mode == "median":
+            self.binarize_fn = np.median
+        else:
+            raise ValueError(
+                f"binarize_mode must be either 'mean' or 'median', not {binarize_mode}"
             )
-        }
+
+    def process(self, data: List[Data]) -> List[Data]:
+        result = []
+        for d in data:
+            arr = d.value.data if d.dtype == DataType.RAW_CHANNEL else d.value
+
+            # compute Lempel-Ziv complexity
+            binary = arr >= self.binarize_fn(arr)
+            lzc = lziv_complexity(binary, normalize=True)
+
+            result.append(Data(d.address, lzc, DataType.FLOAT))
+        return result
 
 
 class SpectralEntropy(Processor):

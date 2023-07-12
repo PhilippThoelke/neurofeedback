@@ -1,5 +1,5 @@
 import time
-from typing import Dict, List
+from typing import List, Union
 
 from neurofeedback.utils import DataIn, DataOut, Normalization, Processor
 
@@ -19,13 +19,13 @@ class Manager:
 
     def __init__(
         self,
-        data_in: Dict[str, DataIn],
+        data_in: Union[DataIn, List[DataIn]],
         processors: List[Processor],
         normalization: Normalization,
         data_out: List[DataOut],
         frequency: int = 10,
     ):
-        self.data_in = data_in
+        self.data_in = data_in if isinstance(data_in, list) else [data_in]
         self.processors = processors
         self.normalization = normalization
         self.data_out = data_out
@@ -34,6 +34,7 @@ class Manager:
         self.frequency = frequency
         self.too_slow_count = 0
         self.filling_buffer = True
+        self.data = dict()
 
     def update(self):
         """
@@ -41,33 +42,23 @@ class Manager:
         outputs the processed data to the output channels.
         """
         # fetch raw data
-        if any(d.update() == -1 for d in self.data_in.values()):
+        if any(d.update(self.data) == -1 for d in self.data_in):
             return
         elif self.filling_buffer:
             print("done")
             self.filling_buffer = False
 
         # process raw data (feature extraction)
-        processed, intermediates, normalize_mask = {}, {}, {}
         for processor in self.processors:
-            normalize_mask.update(processor(self.data_in, processed, intermediates))
+            processor.update(self.data)
 
-        # extract the features that need normalization
-        finished = {
-            lbl: feat for lbl, feat in processed.items() if not normalize_mask[lbl]
-        }
-        unfinished = {
-            lbl: feat for lbl, feat in processed.items() if normalize_mask[lbl]
-        }
+        from neurofeedback.utils import DataType
 
-        # normalize extracted features
-        self.normalization.normalize(unfinished)
-        finished.update(unfinished)
-        finished = {lbl: finished[lbl] for lbl in processed.keys()}
+        print({k: v for k, v in self.data.items() if v.dtype == DataType.FLOAT})
 
         # update data outputs
         for out in self.data_out:
-            out.update(self.data_in, finished)
+            out.update(self.data)
 
     def run(self, n_iterations: int = -1):
         """
@@ -106,31 +97,32 @@ if __name__ == "__main__":
     from neurofeedback import data_in, data_out, normalization, processors
 
     mngr = Manager(
-        data_in={
-            "file": data_in.EEGRecording.make_eegbci(),
-        },
+        data_in=[
+            data_in.EEGRecording.make_eegbci(),
+            # "file": data_in.EEGStream("Muse00:55:DA:B0:49:D3"),
+        ],
         processors=[
-            processors.PSD(label="delta"),
-            processors.PSD(label="theta"),
-            processors.PSD(label="alpha"),
-            processors.PSD(label="beta"),
-            processors.PSD(label="gamma"),
-            processors.LempelZiv(),
-            processors.Ratio("/file/alpha", "/file/theta", "alpha/theta"),
-            processors.Bioelements(channels={"file": ["C3"]}),
-            processors.Biocolor(channels={"file": ["C3"]}),
-            processors.OpenAI(
-                "/file/biocolor/ch0_peak0_name",
-                "/file/bioelements/ch0_bioelements",
-                read_text=True,
-            ),
+            # processors.PSD(label="delta"),
+            # processors.PSD(label="theta"),
+            # processors.PSD(label="alpha"),
+            # processors.PSD(label="beta"),
+            # processors.PSD(label="gamma"),
+            processors.LempelZiv("/eegbci/F.*", reduce=None),
+            # processors.Ratio("/file/alpha", "/file/theta", "alpha/theta"),
+            # processors.Bioelements(channels={"file": ["AF7"]}),
+            # processors.Biocolor(channels={"file": ["AF7"]}),
+            # processors.OpenAI(
+            #     "/file/biocolor/ch0_peak0_name",
+            #     "/file/bioelements/ch0_bioelements",
+            #     read_text=True,
+            # ),
             # processors.Biotuner(channels={"file": ["O1", "O2"]}),
         ],
         normalization=normalization.StaticBaselineNormal(duration=30),
         data_out=[
-            data_out.OSCStream("127.0.0.1", 5005),
-            data_out.PlotRaw("file"),
-            data_out.PlotProcessed(),
+            # data_out.OSCStream("127.0.0.1", 5005),
+            # data_out.PlotRaw("file"),
+            # data_out.PlotProcessed(),
         ],
     )
 

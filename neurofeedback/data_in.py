@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import mne
 import numpy as np
@@ -10,7 +10,7 @@ from mne.datasets import eegbci
 from mne.io import BaseRaw, concatenate_raws, read_raw
 from mne_realtime import LSLClient, MockLSLStream
 
-from neurofeedback.utils import DataIn
+from neurofeedback.utils import MNE_CHANNEL_TYPE_MAPPING, DataIn
 
 mne.set_log_level(False)
 
@@ -20,38 +20,41 @@ class DummyStream(DataIn):
     Dummy stream for testing purposes.
 
     Parameters:
+        address (str): the address of the stream
         data (str): the type of data to generate, one of "normal", "zeros", "arange", "exp"
         n_channels (int): number of channels to generate
-        sfreq (int): sampling frequency
-        buffer_seconds (int): number of seconds to buffer
+        sfreq (float): sampling frequency
+        **kwargs: additional keyword arguments to pass to the DataIn constructor
     """
 
-    def __init__(self, data="normal", n_channels=5, sfreq=100, buffer_seconds=5):
-        super().__init__(buffer_seconds)
+    def __init__(
+        self,
+        address: str = "dummy",
+        data: str = "normal",
+        n_channels: int = 5,
+        sfreq: float = 100,
+        **kwargs,
+    ):
+        super().__init__(address=address, **kwargs)
         assert data in ["normal", "zeros", "arange", "exp"]
 
         self.data = data
         self.n_channels = n_channels
         self.sfreq = sfreq
-        self.last_receive = time.time() - buffer_seconds
+        self.last_receive = None
 
         # fill the buffer so we don't need to wait for the first receive
         self.update()
 
     @property
-    def info(self) -> mne.Info:
-        """
-        Returns an MNE info for this dummy stream
-        """
-        return mne.create_info(
-            [f"ch{i}" for i in range(self.n_channels)], self.sfreq, "eeg"
-        )
+    def info(self) -> Dict[str, Any]:
+        return dict(sfreq=self.sfreq, ch_types=["misc"] * self.n_channels)
 
     def receive(self) -> np.ndarray:
-        """
-        Returns a random NumPy array with shape (Channels, Time).
-        """
-        n_samples = int((time.time() - self.last_receive) * self.sfreq)
+        if self.last_receive is None:
+            n_samples = int(self.buffer_seconds * self.sfreq)
+        else:
+            n_samples = int((time.time() - self.last_receive) * self.sfreq)
         self.last_receive = time.time()
 
         if self.data == "normal":
@@ -72,13 +75,12 @@ class DummyStream(DataIn):
                 .reshape(n_samples, self.n_channels)
                 .T
             )
-        # scale the data to microvolts
-        return dat.astype(np.float32) * 1e-6
+        return dat.astype(np.float32)
 
 
 class SerialStream(DataIn):
-    def __init__(self, sfreq: int, buffer_seconds: int = 5):
-        super(SerialStream, self).__init__(buffer_seconds=buffer_seconds)
+    def __init__(self, sfreq: int, address: str = "serial", **kwargs):
+        super().__init__(address=address, **kwargs)
         self.sfreq = sfreq
         self.serial_buffer = []
         self.buffer_times = []
@@ -123,12 +125,8 @@ class SerialStream(DataIn):
                 packet.append(c[0])
 
     @property
-    def info(self) -> mne.Info:
-        return mne.create_info(
-            ch_names=["serial"],
-            ch_types=["bio"],
-            sfreq=self.sfreq,
-        )
+    def info(self) -> Dict[str, Any]:
+        return dict(ch_names=["serial"], ch_types=["bio"], sfreq=self.sfreq)
 
     def receive(self) -> np.ndarray:
         with self.lock:
@@ -180,11 +178,14 @@ class EEGStream(DataIn):
     Parameters:
         host (str): the LSL stream's hostname
         port (int): the LSL stream's port (if None, use the LSLClient's default port)
-        buffer_seconds (int): the number of seconds to buffer incoming data
+        address (str): the address of the resulting data stream
+        **kwargs: additional arguments to pass to the DataIn constructor
     """
 
-    def __init__(self, host: str, port: Optional[int] = None, buffer_seconds: int = 5):
-        super(EEGStream, self).__init__(buffer_seconds=buffer_seconds)
+    def __init__(
+        self, host: str, port: Optional[int] = None, address: str = "eeg", **kwargs
+    ):
+        super().__init__(address=address, **kwargs)
 
         # start LSL client
         self.client = LSLClient(host=host, port=port)
@@ -192,17 +193,12 @@ class EEGStream(DataIn):
         self.data_iterator = self.client.iter_raw_buffers()
 
     @property
-    def info(self) -> mne.Info:
-        """
-        Returns the MNE info object corresponding to this EEG stream
-        """
-        return self.client.get_measurement_info()
+    def info(self) -> Dict[str, Any]:
+        info = dict(self.client.get_measurement_info())
+        info["ch_types"] = [MNE_CHANNEL_TYPE_MAPPING[ch["kind"]] for ch in info["chs"]]
+        return info
 
     def receive(self) -> np.ndarray:
-        """
-        Returns newly acquired samples from the EEG stream as a NumPy array
-        with shape (Channels, Time). If there are no new samples None is returned.
-        """
         data = next(self.data_iterator)
         if data.size == 0:
             return None
@@ -216,9 +212,11 @@ class EEGRecording(EEGStream):
 
     Parameters:
         raw (str, BaseRaw): file-name of a raw EEG file or an instance of mne.io.BaseRaw
+        address (str): the address of the resulting data stream
+        **kwargs: additional arguments to pass to the EEGStream constructor
     """
 
-    def __init__(self, raw: Union[str, BaseRaw]):
+    def __init__(self, raw: Union[str, BaseRaw], address: str = "eeg-file", **kwargs):
         # load raw EEG data
         if not isinstance(raw, BaseRaw):
             raw = read_raw(raw)
@@ -230,12 +228,14 @@ class EEGRecording(EEGStream):
         self.mock_stream.start()
 
         # start the LSL client
-        super(EEGRecording, self).__init__(host=host)
+        super().__init__(host=host, address=address, **kwargs)
 
     @staticmethod
     def make_eegbci(
+        address: str = "eegbci",
         subjects: Union[int, List[int]] = 1,
         runs: Union[int, List[int]] = [1, 2],
+        **kwargs,
     ):
         """
         Static utility function to instantiate an EEGRecording instance using
@@ -245,9 +245,11 @@ class EEGRecording(EEGStream):
         for information about the dataset and a description of different runs.
 
         Parameters:
+            address (str): the address of the resulting data stream
             subjects (int, List[int]): which subject(s) to load data from
             runs (int, List[int]): which run(s) to load from the corresponding subject
+            **kwargs: additional arguments to pass to the EEGRecording constructor
         """
         raw = concatenate_raws([read_raw(p) for p in eegbci.load_data(subjects, runs)])
         eegbci.standardize(raw)
-        return EEGRecording(raw)
+        return EEGRecording(raw, address=address, **kwargs)

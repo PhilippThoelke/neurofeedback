@@ -1,11 +1,13 @@
 import colorsys
+import re
 import threading
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from collections import deque
+from dataclasses import dataclass
+from enum import Flag
 from tempfile import NamedTemporaryFile
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
-import mne
 import numpy as np
 import webcolors
 from biotuner.biocolors import audible2visible, scale2freqs, wavelength_to_rgb
@@ -19,8 +21,101 @@ from biotuner.biotuner_object import compute_biotuner, dyad_similarity, harmonic
 from biotuner.harmonic_connectivity import harmonic_connectivity
 from biotuner.metrics import tuning_cons_matrix
 from gtts import gTTS
-from mne.io.base import _get_ch_factors
+from mne.io.constants import FIFF
 from playsound import playsound
+
+MNE_CHANNEL_TYPE_MAPPING = {
+    FIFF.FIFFV_BIO_CH: "bio",
+    FIFF.FIFFV_MEG_CH: "meg",
+    FIFF.FIFFV_REF_MEG_CH: "ref_meg",
+    FIFF.FIFFV_EEG_CH: "eeg",
+    FIFF.FIFFV_MCG_CH: "mcg",
+    FIFF.FIFFV_STIM_CH: "stim",
+    FIFF.FIFFV_EOG_CH: "eog",
+    FIFF.FIFFV_EMG_CH: "emg",
+    FIFF.FIFFV_ECG_CH: "ecg",
+    FIFF.FIFFV_MISC_CH: "misc",
+    FIFF.FIFFV_RESP_CH: "resp",
+    FIFF.FIFFV_SEEG_CH: "seeg",
+    FIFF.FIFFV_DBS_CH: "dbs",
+    FIFF.FIFFV_SYST_CH: "syst",
+    FIFF.FIFFV_ECOG_CH: "ecog",
+    FIFF.FIFFV_IAS_CH: "ias",
+    FIFF.FIFFV_EXCI_CH: "exci",
+    FIFF.FIFFV_DIPOLE_WAVE: "dipole_wave",
+    FIFF.FIFFV_GOODNESS_FIT: "goodness_fit",
+    FIFF.FIFFV_FNIRS_CH: "fnirs",
+    FIFF.FIFFV_GALVANIC_CH: "galvanic",
+    FIFF.FIFFV_TEMPERATURE_CH: "temperature",
+    FIFF.FIFFV_EYETRACK_CH: "eyetrack",
+}
+
+
+class DataType(Flag):
+    FLOAT = 1
+    STRING = 2
+    ARRAY_1D = 4
+    IMAGE = 8
+    RAW_CHANNEL = 16
+
+
+@dataclass
+class Data:
+    address: str
+    value: Any
+    dtype: DataType
+
+    def __post_init__(self):
+        self.address = fmt_address(self.address)
+
+
+@dataclass
+class RawData:
+    """
+    Container for a single raw data channel with info dictionary.
+    The info must at minimum contain the sampling frequency ('sfreq') and
+    channel types ('ch_types'). If no channel name is provided, it will
+    automatically be set to 'ch_name': 'ch{ch_idx}'.
+
+    If the data is multi-channel, only the channel with index 'ch_idx' will be
+    selected.
+
+    Parameters:
+        data (np.ndarray): single channel with raw time series data as a 1D array
+        info (dict): the info dictionary for this channel
+        ch_idx (int): the index of this channel in the raw data stream
+    """
+
+    data: np.ndarray
+    info: dict
+    ch_idx: int
+
+    def __post_init__(self):
+        if self.data.ndim > 1:
+            # select channel from info
+            updated_info = {}
+            for key, value in self.info.items():
+                if isinstance(value, list) and len(value) == self.data.shape[1]:
+                    updated_info[key] = value[self.ch_idx]
+                else:
+                    updated_info[key] = value
+            self.info = updated_info
+
+            # select channel from data
+            self.data = self.data[:, self.ch_idx]
+
+        # check data and info
+        assert isinstance(self.data, np.ndarray), "RawData.data must be a numpy array"
+        assert self.data.ndim == 1, "RawData.data must be a 1D array"
+        assert "sfreq" in self.info, "RawData.info must contain 'sfreq' key"
+        assert "ch_types" in self.info, "RawData.info must contain 'ch_types' key"
+
+        # set channel name if not provided
+        if "ch_name" not in self.info:
+            if "ch_names" in self.info:
+                self.info["ch_name"] = self.info["ch_names"]
+            else:
+                self.info["ch_name"] = f"ch{self.ch_idx}"
 
 
 class DataIn(ABC):
@@ -28,37 +123,49 @@ class DataIn(ABC):
     Abstract data input stream. Derive from this class to implement new input streams.
 
     Parameters:
-        buffer_seconds (int): the number of seconds to buffer incoming data
+        address (str): the address of this input stream
+        buffer_seconds (float): the number of seconds to buffer incoming data
+        rescale (float): the factor to rescale the incoming data with
     """
 
-    def __init__(self, buffer_seconds):
-        self.buffer = None
+    def __init__(self, address: str, buffer_seconds: float = 5, rescale: float = 1):
+        self.address = address
         self.buffer_seconds = buffer_seconds
+        self.rescale = rescale
+
+        self.buffer = None
         self.n_samples_received = -1
         self.samples_missed_count = 0
-        self.unit_conversion = None
 
-    @property
-    @abstractmethod
-    def info(self) -> mne.Info:
+    @abstractproperty
+    def info(self) -> Dict[str, Any]:
         """
-        Implement this property to return the mne.Info object for this input stream.
+        Property to access information about the data stream.
+
+        Returns:
+            info (dict): the info dictionary
         """
         pass
 
     @abstractmethod
     def receive(self) -> np.ndarray:
         """
-        This function is called by the Manager to fetch new data.
+        Fetch new samples from the input stream.
 
         Returns:
             data (np.ndarray): an array with newly acquired data samples with shape (Channels, Time)
         """
         pass
 
-    def update(self):
+    def update(self, data: Dict[str, Data]) -> int:
         """
-        This function is called by the Manager to update the raw buffer with new data.
+        This function is called by the Manager to update the data dict with new data.
+
+        Parameters:
+            data (Dict[str, Data]): the data dict to update
+
+        Returns:
+            n_samples_received (int): the number of new samples received
         """
         if self.buffer is None:
             # initialize raw buffer
@@ -71,12 +178,8 @@ class DataIn(ABC):
             self.n_samples_received = -1
             return -1
 
-        # convert the data into micro Volts
-        if self.unit_conversion is None:
-            self.unit_conversion = _get_ch_factors(
-                self.info, "uV", np.arange(self.info["nchan"])
-            )[:, None]
-        new_data *= self.unit_conversion
+        # rescale data
+        new_data *= self.rescale
 
         # make sure we didn't receive more samples than the buffer can hold
         self.n_samples_received = new_data.shape[1]
@@ -95,6 +198,15 @@ class DataIn(ABC):
         # skip processing and output steps while the buffer is not full
         if len(self.buffer) < self.buffer.maxlen:
             return -1
+
+        # update data dict
+        raw_buff = np.asarray(self.buffer)
+        for i, ch in enumerate(self.info["ch_names"]):
+            addr = fmt_address(f"/{self.address}/{ch}")
+            # select single channel from raw data
+            raw = RawData(raw_buff, self.info, i)
+            # insert raw into data dict
+            data[addr] = Data(addr, raw, DataType.RAW_CHANNEL)
         return self.n_samples_received
 
 
@@ -120,127 +232,159 @@ class DataOut(ABC):
 
 
 class Processor(ABC):
+    INPUT_DTYPES = None
+
     """
     Abstract data processor. Derive from this class to implement new feature extractors.
 
     Parameters:
-        label (str): the label to be associated with the extracted features
-        channels (Dict[str, List[str]]): channel list for each input stream
-        normalize (Union[bool, Dict[str, bool]]): global (bool) or per-feature normalization (dict)
+        output_address (str): the address of the output stream
+        input_addresses (str): the addresses of the input streams
+        reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
 
-    def __init__(
-        self,
-        label: str,
-        channels: Dict[str, List[str]],
-        normalize: Union[bool, Dict[str, bool]] = True,
-    ):
-        self.label = label
-        self.channels = channels
-        self.normalize = normalize
+    def __init__(self, output_address: str, *input_addresses: str, reduce: str = None):
+        assert reduce in [
+            None,
+            "mean",
+            "median",
+            "max",
+            "min",
+            "std",
+        ], f"Invalid reduce method '{reduce}'. Must be one of None, 'mean', 'median', 'max', 'min', 'std'."
+
+        self.output_address = output_address
+        self.input_addresses = input_addresses
+        self.reduce = reduce
+
+        if self.INPUT_DTYPES is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} does not define INPUT_DTYPES. All Processors "
+                f"must define this class variable."
+            )
 
     @abstractmethod
     def process(
-        self,
-        raw: np.ndarray,
-        info: mne.Info,
-        processed: Dict[str, float],
-        intermediates: Dict[str, np.ndarray],
-    ) -> Dict[str, float]:
+        self, data: List[Data]
+    ) -> Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]]:
         """
-        This function is called internally by __call__ to run the feature extraction.
-        Deriving classes should insert the extracted feature into the processed dictionary
-        and store intermediate representations that could be useful to other Processors in
-        the intermediates dictionary (e.g. the full power spectrum). This function shouldn't
-        be called directly as the channel selection is handled by __call__.
+        Process some input data and return the extracted features. The input data is a list of
+        Data objects, filtered to match the INPUT_DTYPES and input_addresses of this Processor.
+
+        Note: all lists in the return value will be reduced to a single Data object if reduce is not None.
 
         Parameters:
-            raw (np.ndarray): the raw EEG buffer with shape (Channels, Time)
-            info (mne.Info): info object containing e.g. channel names, sampling frequency, etc.
-            processed (Dict[str, float]): dictionary collecting extracted features
-            intermediates (Dict[str, np.ndarray]): dictionary containing intermediate representations
+            data (List[Data]): the data dict containing the input Data objects
 
         Returns:
-            features (Dict[str, float]): the extracted features from this processor
+            - features: the extracted features, can be one of
+                - Data: a single Data object
+                - List[Data]: a list of Data objects
+                - Dict[str, Data]: a dictionary of Data objects
+                - Dict[str, List[Data]]: a dictionary of lists of Data objects
         """
         pass
 
-    def __call__(
-        self,
-        data_in: List[DataIn],
-        processed: Dict[str, float],
-        intermediates: Dict[str, np.ndarray],
-    ) -> Dict[str, bool]:
+    def update(self, data: Dict[str, Data]):
         """
         Deriving classes should not override this method. It get's called by the Manager,
         applies channel selection and calles the process method with the channel subset.
 
         Parameters:
-            data_in (List[DataIn]): list of input streams
-            processed (Dict[str, float]): dictionary collecting extracted features
-            intermediates (Dict[str, np.ndarray]): dictionary containing intermediate representations
-
-        Returns:
-            normalization_mask (Dict[str, bool]): dictionary indicating which features should be normalized
+            data (Dict[str, Data]): the data dict containing the input Data objects
         """
-        if not hasattr(self, "channels"):
+        if self.INPUT_DTYPES is None:
             raise RuntimeError(
-                f"Couldn't find the channels attributes in {self}, "
-                "make sure to call the parent class' __init__ inside the derived Processor."
-            )
-        if self.label in processed:
-            raise RuntimeError(
-                f'A feature with label "{self.label}" already exists. '
-                "Make sure each processor has a unique label."
+                "Deriving classes must call the super().__init__() method in their constructor"
             )
 
-        if self.channels is None:
-            # use all channels
-            self.channels = {name: [] for name in data_in.keys()}
+        # select channels
+        subset = [
+            data[addr]
+            for addr in expand_address(self.input_addresses, list(data.keys()))
+            if data[addr].dtype in self.INPUT_DTYPES
+        ]
+        # process the data
+        result = self.process(subset)
 
-        normalize_mask = {}
-        for name in self.channels.keys():
-            stream = data_in[name]
+        # insert processed data into data dict
+        self.insert_result(result, data)
 
-            # pick channels
-            assert isinstance(self.channels[name], list), "Channels must be a list."
-            ch_idxs = mne.pick_channels(
-                stream.info["ch_names"], self.channels[name], []
-            )
-
-            # grab current stream's data
-            raw = np.array(stream.buffer).T
-            raw = raw[ch_idxs]
-            info = mne.pick_info(stream.info, ch_idxs, copy=True)
-
-            # process the data
-            new_features = self.process(
-                raw,
-                info,
-                processed,
-                intermediates,
-            )
-            new_normalize_mask = None
-            if isinstance(new_features, tuple) or isinstance(new_features, list):
-                new_features, new_normalize_mask = new_features
-            new_features = {f"/{name}/{k}": v for k, v in new_features.items()}
-            processed.update(new_features)
-
-            if new_normalize_mask is not None:
-                new_normalize_mask = {
-                    f"/{name}/{k}": v for k, v in new_normalize_mask.items()
-                }
-                normalize_mask.update(new_normalize_mask)
+    def insert_result(
+        self,
+        result: Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]],
+        data: Dict[str, Data],
+        suffix: str = "",
+    ):
+        """
+        Insert the result of the process method into the data dict, applying the reduce method if necessary.
+        """
+        if isinstance(result, Data):
+            self.update_address(result, suffix)
+            data[result.address] = result
+        elif isinstance(result, list):
+            if self.reduce is None:
+                # insert all items in the list
+                for item in result:
+                    self.insert_result(item, data, suffix=suffix)
             else:
-                if isinstance(self.normalize, bool):
-                    normalize_mask.update(
-                        {lbl: self.normalize for lbl in new_features.keys()}
-                    )
-                else:
-                    normalize_mask.update(
-                        {lbl: self.normalize[lbl] for lbl in new_features.keys()}
-                    )
-        return normalize_mask
+                reduced_data = self.reduce_list(result, suffix)
+                self.insert_result(reduced_data, data)
+        elif isinstance(result, dict):
+            for key, value in result.items():
+                self.insert_result(value, data, suffix=f"{suffix}/{key}")
+        else:
+            raise TypeError(f"Unsupported result type: {type(result)}")
+
+    def reduce_list(self, data_list: List[Data], suffix: str = "") -> Data:
+        """
+        Reduce a list of Data objects to a single Data object using the specified reduction method.
+        """
+        if self.reduce is None:
+            raise ValueError(
+                "Can't reduce a list of Data objects without a reduction method"
+            )
+
+        # make sure the dtype is reducible
+        assert data_list[0].dtype in [
+            DataType.FLOAT,
+            DataType.ARRAY_1D,
+            DataType.IMAGE,
+        ], (
+            f"Can't reduce a list of Data objects with dtype {data_list[0].dtype}. "
+            "Supported dtypes are FLOAT, ARRAY_1D and IMAGE."
+        )
+
+        # make sure every item in the list has the same dtype
+        assert all(
+            data.dtype == data_list[0].dtype for data in data_list
+        ), "Can't mix dtypes when reducing a list of Data objects"
+
+        # split off the address' channel name
+        addr = "/".join(data_list[0].address.split("/")[:-1])
+        addr = f"{addr}/{suffix}/{self.reduce}"
+        # prepare the data
+        data_arr = np.stack([data.value for data in data_list], axis=0)
+        dtype = data_list[0].dtype
+
+        # reduce the list
+        if self.reduce == "mean":
+            return Data(addr, np.mean(data_arr, axis=0), dtype)
+        elif self.reduce == "median":
+            return Data(addr, np.median(data_arr, axis=0), dtype)
+        elif self.reduce == "max":
+            return Data(addr, np.max(data_arr, axis=0), dtype)
+        elif self.reduce == "min":
+            return Data(addr, np.min(data_arr, axis=0), dtype)
+        elif self.reduce == "std":
+            return Data(addr, np.std(data_arr, axis=0), dtype)
+        else:
+            raise ValueError(f"Unsupported reduction method: {self.reduce}")
+
+    def update_address(self, data: Data, suffix: str = None):
+        suffix = f"/{suffix}" or ""
+        data.address = fmt_address(f"/{self.output_address}/{data.address}{suffix}")
+        return data
 
 
 class Normalization(ABC):
@@ -286,6 +430,45 @@ class Normalization(ABC):
         while True:
             input("Press enter to reset normalization parameters.\n")
             self.reset()
+
+
+def fmt_address(address: str) -> str:
+    """Remove repeated and trailing slashes from the address string and make sure it starts with a slash."""
+    return "/" + re.sub(r"/+", "/", address).strip("/")
+
+
+def expand_address(
+    address: Union[str, Tuple[str], List[str]], available_addresses: List[str]
+) -> List[str]:
+    """
+    Expand address patterns into an exhaustive list of addresses. Pattern matching follows
+    regular expression syntax.
+
+    Note that forward slashes will be escaped automatically. If you want to match a literal
+    forward slash, you need to escape it with a backslash.
+
+    Parameters:
+        address (Union[str, Tuple[str], List[str]]): Address patterns, e.g. "/foo/.*".
+        data (List[str]): List of addresses to match against.
+
+    Returns:
+        addresses (List[str]): A list of expanded addresses.
+    """
+    if isinstance(address, str):
+        return expand_address((address,), available_addresses)
+    elif len(address) == 0:
+        # empty address list matches all
+        return available_addresses
+
+    # expand addresses
+    if len(address) == 1:
+        # escape forward slashes
+        address = address[0].replace("/", r"\/")
+        # match against all addresses
+        return [a for a in available_addresses if re.match(address, a)]
+    else:
+        # recursively expand addresses
+        return sum([expand_address(a, available_addresses) for a in address], [])
 
 
 def viz_scale_colors(scale: List[float], fund: float) -> List[Tuple[int, int, int]]:
