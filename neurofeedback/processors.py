@@ -149,7 +149,7 @@ class PSD(Processor):
 
 
 class LempelZiv(Processor):
-    INPUT_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
+    SUPPORTED_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
 
     """
     Feature extractor for Lempel-Ziv complexity.

@@ -211,28 +211,40 @@ class DataIn(ABC):
 
 
 class DataOut(ABC):
+    SUPPORTED_DTYPES = None
     """
     Abstract data output stream. Derive from this class to implement new output streams.
     """
 
     @abstractmethod
-    def update(
-        self,
-        data_in: Dict[str, DataIn],
-        processed: Dict[str, float],
-    ):
+    def output(self, data: List[Data]):
         """
-        This function is called by the Manager to send a new batch of data to the output stream.
+        Output the current data.
 
         Parameters:
-            data_in (Dict[str, DataIn]): list of input streams
-            processed (Dict[str, float]): dictionary of extracted normalized features
+            data (List[Data]): the data dict to send
         """
         pass
 
+    def update(self, data: Dict[str, Data]):
+        """
+        Deriving classes should not override this method. It get's called by the Manager,
+        selects which data to output and calls the abstract output method.
+
+        Parameters:
+            data (Dict[str, Data]): the data dict to send
+        """
+        if self.SUPPORTED_DTYPES is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} does not define SUPPORTED_DTYPES. All DataOut "
+                "classes must define this class variable."
+            )
+
+        self.output([d for d in data.values() if d.dtype in self.SUPPORTED_DTYPES])
+
 
 class Processor(ABC):
-    INPUT_DTYPES = None
+    SUPPORTED_DTYPES = None
 
     """
     Abstract data processor. Derive from this class to implement new feature extractors.
@@ -259,9 +271,9 @@ class Processor(ABC):
         self.input_addresses = input_addresses
         self.reduce = reduce
 
-        if self.INPUT_DTYPES is None:
+        if self.SUPPORTED_DTYPES is None:
             raise RuntimeError(
-                f"{self.__class__.__name__} does not define INPUT_DTYPES. All Processors "
+                f"{self.__class__.__name__} does not define SUPPORTED_DTYPES. All Processors "
                 f"must define this class variable."
             )
 
@@ -271,7 +283,7 @@ class Processor(ABC):
     ) -> Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]]:
         """
         Process some input data and return the extracted features. The input data is a list of
-        Data objects, filtered to match the INPUT_DTYPES and input_addresses of this Processor.
+        Data objects, filtered to match the SUPPORTED_DTYPES and input_addresses of this Processor.
 
         Note: all lists in the return value will be reduced to a single Data object if reduce is not None.
 
@@ -295,7 +307,7 @@ class Processor(ABC):
         Parameters:
             data (Dict[str, Data]): the data dict containing the input Data objects
         """
-        if self.INPUT_DTYPES is None:
+        if self.SUPPORTED_DTYPES is None:
             raise RuntimeError(
                 "Deriving classes must call the super().__init__() method in their constructor"
             )
@@ -304,7 +316,7 @@ class Processor(ABC):
         subset = [
             data[addr]
             for addr in expand_address(self.input_addresses, list(data.keys()))
-            if data[addr].dtype in self.INPUT_DTYPES
+            if data[addr].dtype in self.SUPPORTED_DTYPES
         ]
         # process the data
         result = self.process(subset)

@@ -52,10 +52,6 @@ class Manager:
         for processor in self.processors:
             processor.update(self.data)
 
-        from neurofeedback.utils import DataType
-
-        print({k: v for k, v in self.data.items() if v.dtype == DataType.FLOAT})
-
         # update data outputs
         for out in self.data_out:
             out.update(self.data)
@@ -120,7 +116,7 @@ if __name__ == "__main__":
         ],
         normalization=normalization.StaticBaselineNormal(duration=30),
         data_out=[
-            # data_out.OSCStream("127.0.0.1", 5005),
+            data_out.OSCStream("127.0.0.1", 5005),
             # data_out.PlotRaw("file"),
             # data_out.PlotProcessed(),
         ],

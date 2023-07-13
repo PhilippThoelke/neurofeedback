@@ -1,6 +1,7 @@
+import struct
 import time
 from os.path import exists
-from typing import Dict
+from typing import Dict, List, Union
 
 import mne
 import numpy as np
@@ -10,7 +11,8 @@ from pyedflib import EdfWriter, highlevel
 from pythonosc import osc_bundle_builder
 from pythonosc.osc_message_builder import OscMessageBuilder
 from pythonosc.udp_client import UDPClient
-from neurofeedback.utils import DataIn, DataOut
+
+from neurofeedback.utils import Data, DataIn, DataOut, DataType, fmt_address
 
 
 class PlotRaw(DataOut):
@@ -177,6 +179,9 @@ class PlotProcessed(DataOut):
 
 
 class OSCStream(DataOut):
+    SUPPORTED_DTYPES = (
+        DataType.FLOAT | DataType.STRING | DataType.ARRAY_1D | DataType.IMAGE
+    )
     """
     Stream extracted features via OSC. The OSC addresses are the names of the extracted
     features (i.e. the keys in the processed dictionary), prefixed by address_prefix.
@@ -191,25 +196,26 @@ class OSCStream(DataOut):
         self.address_prefix = address_prefix
         self.client = UDPClient(ip, port)
 
-    def update(self, data_in: Dict[str, DataIn], processed: Dict[str, float]):
+    def output(self, data: List[Data]):
         """
         Send the extracted features to the target OSC server. The processed dictionary
         gets combined into a single OSC Bundle with a different OSC address per feature.
 
         Parameters:
-            data_in (Dict[str, DataIn]): list of input streams
-            processed (Dict[str, float]): dictionary of extracted, normalized features
+            data (List[Data]): list of data streams
         """
         # Initialize an empty bundle
         bundle = osc_bundle_builder.OscBundleBuilder(osc_bundle_builder.IMMEDIATELY)
 
-        for key, val in processed.items():
+        for d in data:
             # Create a new message
-            msg = OscMessageBuilder(self.address_prefix + key)
-            if isinstance(val, float):
-                msg.add_arg(val, OscMessageBuilder.ARG_TYPE_FLOAT)
-            elif isinstance(val, str):
-                msg.add_arg(val, OscMessageBuilder.ARG_TYPE_STRING)
+            msg = OscMessageBuilder(fmt_address(f"{self.address_prefix}/{d.address}"))
+            if d.dtype in (DataType.ARRAY_1D | DataType.IMAGE):
+                # python-osc automatically handles lists
+                msg.add_arg(d.value.tolist())
+            else:
+                # let OSC guess the type
+                msg.add_arg(d.value)
 
             # Add the message to the bundle
             bundle.add_content(msg.build())
