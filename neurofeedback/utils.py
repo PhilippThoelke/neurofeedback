@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Flag
 from tempfile import NamedTemporaryFile
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import webcolors
@@ -243,7 +243,9 @@ class Processor(ABC):
         reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
 
-    def __init__(self, output_address: str, *input_addresses: str, reduce: str = None):
+    def __init__(
+        self, output_address: str, *input_addresses: str, reduce: Optional[str] = None
+    ):
         assert reduce in [
             None,
             "mean",
@@ -381,7 +383,7 @@ class Processor(ABC):
         else:
             raise ValueError(f"Unsupported reduction method: {self.reduce}")
 
-    def update_address(self, data: Data, suffix: str = None):
+    def update_address(self, data: Data, suffix: Optional[str] = None):
         suffix = f"/{suffix}" or ""
         data.address = fmt_address(f"/{self.output_address}/{data.address}{suffix}")
         return data
