@@ -1,5 +1,5 @@
 import time
-from typing import List, Union
+from typing import Callable, List, Union
 
 from neurofeedback.utils import DataIn, DataOut, Normalization, Processor
 
@@ -66,13 +66,18 @@ class Manager:
         for out in self.data_out:
             out.update(self.data)
 
-    def run(self, n_iterations: int = -1):
+        # set data from last iteration to dirty
+        for key in self.data:
+            self.data[key].dirty = True
+
+    def run(self, n_iterations: int = -1, callback: Callable = None):
         """
         Start the fetching and processing loop and limit the loop to run at a
         constant update rate.
 
         Parameters:
             n_iterations (int): number of iterations to run the loop for (-1 for infinite)
+            callback (Callable): iteration callback with signature callback(mngr, it)
         """
         print("Filling buffer(s)...", end="")
 
@@ -81,6 +86,10 @@ class Manager:
         while it != n_iterations:
             # receive, process and output data
             self.update()
+
+            # call callback function
+            if callback is not None:
+                callback(self, it)
             it += 1
 
             # limit the loop to run at a constant update rate
