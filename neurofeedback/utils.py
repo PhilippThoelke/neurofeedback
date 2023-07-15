@@ -57,6 +57,7 @@ class DataType(Flag):
     ARRAY_1D = 4
     IMAGE = 8
     RAW_CHANNEL = 16
+    ALL = FLOAT | STRING | ARRAY_1D | IMAGE | RAW_CHANNEL
 
 
 @dataclass
@@ -64,6 +65,7 @@ class Data:
     address: str
     value: Any
     dtype: DataType
+    dirty: bool = False
 
     def __post_init__(self):
         self.address = fmt_address(self.address)

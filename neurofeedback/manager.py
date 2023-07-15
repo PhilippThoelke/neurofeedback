@@ -25,6 +25,16 @@ class Manager:
         data_out: List[DataOut],
         frequency: int = 10,
     ):
+        # check for duplicate processor labels
+        labels = []
+        for processor in processors:
+            if processor.output_address in labels:
+                raise ValueError(
+                    f"Duplicate processor label '{processor.output_address}' detected"
+                )
+            labels.append(processor.output_address)
+
+        # assign pipeline components
         self.data_in = data_in if isinstance(data_in, list) else [data_in]
         self.processors = processors
         self.normalization = normalization
@@ -98,7 +108,7 @@ if __name__ == "__main__":
             # "file": data_in.EEGStream("Muse00:55:DA:B0:49:D3"),
         ],
         processors=[
-            # processors.PSD(label="delta"),
+            processors.PSD(band="delta"),
             # processors.PSD(label="theta"),
             # processors.PSD(label="alpha"),
             # processors.PSD(label="beta"),
