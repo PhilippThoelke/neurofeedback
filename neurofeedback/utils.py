@@ -340,35 +340,73 @@ class Processor(ABC):
             for addr in expand_address(self.input_addresses, list(data.keys()))
             if data[addr].dtype in self.SUPPORTED_DTYPES
         ]
+
         # process the data
         result = self.process(subset)
+        # postprocess the result by reducing lists and adding the output address
+        result = self.postprocess(result)
+        # check for duplicate addresses and insert the result into the data dict
+        self.insert_checked(result, data)
 
-        # insert processed data into data dict
-        self.insert_result(result, data)
+    def insert_checked(
+        self,
+        new_data: Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]],
+        data: Dict[str, Data],
+    ):
+        if isinstance(new_data, Data):
+            # ===== SINGLE DATA OBJECT =====
+            if new_data.address in data and not data[new_data.address].dirty:
+                raise RuntimeError(
+                    f"Address '{new_data.address}' is already present and not marked as dirty."
+                )
+            # insert new data sample into data dict
+            data[new_data.address] = new_data
+        elif isinstance(new_data, list):
+            # ===== LIST =====
+            for item in new_data:
+                self.insert_checked(item, data)
+        elif isinstance(new_data, dict):
+            # ===== DICTIONARY =====
+            for value in new_data.values():
+                self.insert_checked(value, data)
+        else:
+            raise ValueError(
+                f"Invalid data format {type(new_data)}. Expected Data, List[Data], "
+                "Dict[str, Data] or Dict[str, List[Data]]"
+            )
 
-    def insert_result(
+    def postprocess(
         self,
         result: Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]],
-        data: Dict[str, Data],
         suffix: str = "",
-    ):
+    ) -> Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]]:
         """
-        Insert the result of the process method into the data dict, applying the reduce method if necessary.
+        Postprocess the result of the process method. This method is called recursively on all
+        sub-objects of the result. It appends the output_address to the address of all Data objects
+        and reduces lists if reduce is not None.
         """
         if isinstance(result, Data):
-            self.update_address(result, suffix)
-            data[result.address] = result
+            # ===== SINGLE DATA OBJECT =====
+            suffix = f"/{suffix}" or ""
+            result.address = fmt_address(
+                f"/{self.output_address}/{result.address}{suffix}"
+            )
+            return result
         elif isinstance(result, list):
+            # ===== LIST =====
             if self.reduce is None:
-                # insert all items in the list
-                for item in result:
-                    self.insert_result(item, data, suffix=suffix)
+                # create a list of updated Data objects
+                return [self.postprocess(item, suffix=suffix) for item in result]
             else:
                 reduced_data = self.reduce_list(result, suffix)
-                self.insert_result(reduced_data, data)
+                # Note: reduce_list already took care of appending the suffix
+                return self.postprocess(reduced_data)
         elif isinstance(result, dict):
-            for key, value in result.items():
-                self.insert_result(value, data, suffix=f"{suffix}/{key}")
+            # ===== DICTIONARY =====
+            return {
+                key: self.postprocess(value, suffix=f"{suffix}/{key}")
+                for key, value in result.items()
+            }
         else:
             raise TypeError(f"Unsupported result type: {type(result)}")
 
@@ -416,11 +454,6 @@ class Processor(ABC):
             return Data(addr, np.std(data_arr, axis=0), dtype)
         else:
             raise ValueError(f"Unsupported reduction method: {self.reduce}")
-
-    def update_address(self, data: Data, suffix: Optional[str] = None):
-        suffix = f"/{suffix}" or ""
-        data.address = fmt_address(f"/{self.output_address}/{data.address}{suffix}")
-        return data
 
 
 class Normalization(ABC):

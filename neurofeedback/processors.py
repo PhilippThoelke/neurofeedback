@@ -149,14 +149,18 @@ class PSD(Processor):
 
 
 class LempelZiv(Processor):
-    SUPPORTED_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
-
     """
     Feature extractor for Lempel-Ziv complexity.
 
     Parameters:
         binarize_mode (str): the method to binarize the signal, can be "mean" or "median"
+        output_address (str): the address of the output stream
+        input_addresses (str): the addresses of the input streams
+        **kwargs:
+            reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
+
+    SUPPORTED_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
 
     def __init__(
         self,

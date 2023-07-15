@@ -18,7 +18,7 @@ class DummyProcessor(Processor):
         super().__init__(output_address, *input_addresses, reduce=reduce)
 
     def process(self, data: List[Data]) -> Data:
-        return Data(self.output_address, "dummy-value", DataType.STRING)
+        return Data("feature", "dummy-value", DataType.STRING)
 
 
 class DummyStream(DataIn):
