@@ -24,3 +24,10 @@ def test_dirty_duplicate_output_address():
 
     # this should NOT raise an error because we set p1's output to dirty
     p2.update(data)
+
+
+def test_update_modify():
+    p1 = DummyProcessor(".*", output_address="dummy", illegal_modify_data=True)
+    with pytest.raises(RuntimeError):
+        # this should raise because we are modifying the data dictionary directly
+        p1.update({})

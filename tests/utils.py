@@ -14,10 +14,15 @@ class DummyProcessor(Processor):
         *input_addresses: str,
         output_address: str = "dummy-processor",
         reduce: Optional[str] = None,
+        illegal_modify_data: bool = False,
     ):
         super().__init__(output_address, *input_addresses, reduce=reduce)
+        self.illegal_modify_data = illegal_modify_data
 
     def process(self, data: List[Data]) -> Data:
+        if self.illegal_modify_data:
+            # this should raise an error in the superclass because we are modifying the data
+            data.append(Data("illegal-feature", "dummy-value", DataType.STRING))
         return Data("feature", "dummy-value", DataType.STRING)
 
 

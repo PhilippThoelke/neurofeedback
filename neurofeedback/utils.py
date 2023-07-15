@@ -342,7 +342,14 @@ class Processor(ABC):
         ]
 
         # process the data
+        subset_len = len(subset)
         result = self.process(subset)
+        if subset_len != len(subset):
+            raise RuntimeError(
+                f"Processor {self.__class__.__name__} modified the data argument directly. "
+                "New data samples should be returned instead."
+            )
+
         # postprocess the result by reducing lists and adding the output address
         result = self.postprocess(result)
         # check for duplicate addresses and insert the result into the data dict
