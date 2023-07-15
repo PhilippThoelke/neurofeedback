@@ -28,11 +28,11 @@ class Manager:
         # check for duplicate processor labels
         labels = []
         for processor in processors:
-            if processor.output_address in labels:
+            if processor.output_suffix in labels:
                 raise ValueError(
-                    f"Duplicate processor label '{processor.output_address}' detected"
+                    f"Duplicate processor label '{processor.output_suffix}' detected"
                 )
-            labels.append(processor.output_address)
+            labels.append(processor.output_suffix)
 
         # assign pipeline components
         self.data_in = data_in if isinstance(data_in, list) else [data_in]

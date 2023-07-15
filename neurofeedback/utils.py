@@ -1,4 +1,5 @@
 import colorsys
+import os
 import re
 import threading
 from abc import ABC, abstractmethod, abstractproperty
@@ -233,10 +234,11 @@ class DataIn(ABC):
 
 
 class DataOut(ABC):
-    SUPPORTED_DTYPES = None
     """
     Abstract data output stream. Derive from this class to implement new output streams.
     """
+
+    SUPPORTED_DTYPES = None
 
     @abstractmethod
     def output(self, data: List[Data]):
@@ -266,19 +268,23 @@ class DataOut(ABC):
 
 
 class Processor(ABC):
-    SUPPORTED_DTYPES = None
-
     """
     Abstract data processor. Derive from this class to implement new feature extractors.
 
     Parameters:
-        output_address (str): the address of the output stream
         input_addresses (str): the addresses of the input streams
+        output_suffix (str): the suffix to append to the NAME attribute
         reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
 
+    NAME = None
+    SUPPORTED_DTYPES = None
+
     def __init__(
-        self, output_address: str, *input_addresses: str, reduce: Optional[str] = None
+        self,
+        *input_addresses: str,
+        output_suffix: Optional[str] = None,
+        reduce: Optional[str] = None,
     ):
         assert reduce in [
             None,
@@ -289,10 +295,15 @@ class Processor(ABC):
             "std",
         ], f"Invalid reduce method '{reduce}'. Must be one of None, 'mean', 'median', 'max', 'min', 'std'."
 
-        self.output_address = output_address
+        self.output_suffix = "" if output_suffix is None else f"-{output_suffix}"
         self.input_addresses = input_addresses
         self.reduce = reduce
 
+        if self.NAME is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} does not define NAME. All Processors must define "
+                "this class variable."
+            )
         if self.SUPPORTED_DTYPES is None:
             raise RuntimeError(
                 f"{self.__class__.__name__} does not define SUPPORTED_DTYPES. All Processors "
@@ -301,7 +312,7 @@ class Processor(ABC):
 
     @abstractmethod
     def process(
-        self, data: List[Data]
+        self, data: Dict[str, Data]
     ) -> Union[Data, List[Data], Dict[str, Data], Dict[str, List[Data]]]:
         """
         Process some input data and return the extracted features. The input data is a list of
@@ -310,7 +321,7 @@ class Processor(ABC):
         Note: all lists in the return value will be reduced to a single Data object if reduce is not None.
 
         Parameters:
-            data (List[Data]): the data dict containing the input Data objects
+            data (Dict[str, Data]): the data dict containing address : Data pairs
 
         Returns:
             - features: the extracted features, can be one of
@@ -335,16 +346,16 @@ class Processor(ABC):
             )
 
         # select channels
-        subset = [
-            data[addr]
+        subset = {
+            addr: data[addr]
             for addr in expand_address(self.input_addresses, list(data.keys()))
             if data[addr].dtype in self.SUPPORTED_DTYPES
-        ]
+        }
 
         # process the data
-        subset_len = len(subset)
+        subset_keys = list(subset.keys())
         result = self.process(subset)
-        if subset_len != len(subset):
+        if subset_keys != list(subset.keys()):
             raise RuntimeError(
                 f"Processor {self.__class__.__name__} modified the data argument directly. "
                 "New data samples should be returned instead."
@@ -396,7 +407,7 @@ class Processor(ABC):
             # ===== SINGLE DATA OBJECT =====
             suffix = f"/{suffix}" or ""
             result.address = fmt_address(
-                f"/{self.output_address}/{result.address}{suffix}"
+                f"/{self.NAME}{self.output_suffix}/{result.address}{suffix}"
             )
             return result
         elif isinstance(result, list):
@@ -473,10 +484,11 @@ class Normalization(ABC):
     """
 
     def __init__(self):
-        self.user_input_thread = threading.Thread(
-            target=self.reset_handler, daemon=True
-        )
-        self.user_input_thread.start()
+        if not "PYTEST_CURRENT_TEST" in os.environ:
+            self.user_input_thread = threading.Thread(
+                target=self.reset_handler, daemon=True
+            )
+            self.user_input_thread.start()
 
     @abstractmethod
     def normalize(self, processed: Dict[str, float]):

@@ -59,17 +59,24 @@ def compute_spectrum(
 
 class PSD(Processor):
     """
-    Power Spectral Density (PSD) feature extractor.
+    Power Spectral Density (PSD) feature extractor. The band name will be appended
+    to the key of the extracted feature, e.g. "psd_delta", "psd_theta", "psd_0.5-8".
 
     Parameters:
-        fmin (float): lower frequency boundary (optional if name is inside PSD.band_mapping)
-        fmax (float): upper frequency boundary (optional if name is inside PSD.band_mapping)
+        input_addresses (str): the addresses of the input streams
+        band (str): name of the frequency band to extract (optional if fmin and fmax are specified)
+        fmin (float): lower frequency boundary (optional if `band` is inside PSD.band_mapping)
+        fmax (float): upper frequency boundary (optional if `band` is inside PSD.band_mapping)
         relative (bool): if True, compute the relative power distribution (i.e. power / sum(power))
-        label (str): name of this feature (if it is one of PSD.band_mapping fmin and fmax are set accordingly)
-        channels (Dict[str, List[str]]): channel list for each input stream
+        **kwargs:
+            output_suffix (str): suffix to append to the output address
+            reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
 
-    band_mapping: Dict[str, Tuple[float, float]] = {
+    NAME = "psd"
+    SUPPORTED_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
+
+    FREQ_MAPPING: Dict[str, Tuple[float, float]] = {
         "delta": (0.5, 4),
         "theta": (4, 8),
         "alpha": (8, 12),
@@ -79,51 +86,54 @@ class PSD(Processor):
 
     def __init__(
         self,
+        *input_addresses: str,
+        band: Optional[str] = None,
         fmin: Optional[float] = None,
         fmax: Optional[float] = None,
         relative: bool = False,
-        label: str = "spectral-power",
-        channels: Dict[str, List[str]] = None,
+        **kwargs,
     ):
-        super(PSD, self).__init__(label, channels)
-
-        if label in self.band_mapping:
-            fmin_default, fmax_default = self.band_mapping[label]
-            if fmin is None:
-                fmin = fmin_default
-            if fmax is None:
-                fmax = fmax_default
-        elif fmin is None or fmax is None:
-            raise RuntimeError(
-                f"If label ({label}) is not part of the built-in bands "
-                f"({', '.join(self.band_mapping.keys())}), "
-                f"fmin ({fmin}) and fmax ({fmax}) can't be None."
+        # check inputs
+        if band is not None and band not in self.FREQ_MAPPING:
+            raise ValueError(
+                f"Unknown frequency band {band}, must be one of "
+                f"{', '.join(self.FREQ_MAPPING.keys())}"
             )
-        self.fmin = fmin
-        self.fmax = fmax
+        if band is None and (fmin is None or fmax is None):
+            raise ValueError(
+                "Either `band` or `fmin` and `fmax` must be specified to compute the PSD."
+            )
+        if band is not None and (fmin is not None or fmax is not None):
+            raise ValueError(
+                "Argument `band` is mutually exclusive with `fmin` and `fmax`."
+            )
+
+        # set fmin and fmax
+        if band in self.FREQ_MAPPING:
+            fmin, fmax = self.FREQ_MAPPING[band]
+        else:
+            band = f"{fmin}-{fmax}"
+
+        # append frequency band to output address
+        kwargs["output_suffix"] = f"{kwargs.get('output_suffix', '')}_{band}"
+
+        # add full power spectrum pattern to input addresses
+        input_addresses = list(input_addresses)
+        input_addresses.append(
+            f"{self.NAME}-{kwargs['output_suffix']}/full_power_spectrum/.*"
+        )
+
+        super().__init__(*input_addresses, **kwargs)
+
         self.relative = relative
 
-    def process(
-        self,
-        raw: np.ndarray,
-        info: mne.Info,
-        processed: Dict[str, float],
-        intermediates: Dict[str, np.ndarray],
-    ):
-        """
-        This function computes the power spectrum using Welch's method, if it is not provided
-        in the intermediates dictionary and returns the channel-wise average power in the frequency band
-        defined by fmin and fmax.
+    def process(self, data: Dict[str, Data]) -> List[Data]:
+        for d in data.values():
+            if d.dtype != DataType.RAW_CHANNEL:
+                continue
 
-        Parameters:
-            raw (np.ndarray): the raw EEG buffer with shape (Channels, Time)
-            info (mne.Info): info object containing e.g. channel names, sampling frequency, etc.
-            processed (Dict[str, float]): dictionary collecting extracted features
-            intermediates (Dict[str, np.ndarray]): dictionary containing intermediate representations
+            required_spec = f"/full_power_spectrum{d.address}"
 
-        Returns:
-            features (Dict[str, float]): the extracted features from this processor
-        """
         # compute power spectral density, skips channels that have been processed already
         compute_spectrum(raw, info, intermediates, relative=self.relative)
 
@@ -153,23 +163,23 @@ class LempelZiv(Processor):
     Feature extractor for Lempel-Ziv complexity.
 
     Parameters:
-        binarize_mode (str): the method to binarize the signal, can be "mean" or "median"
-        output_address (str): the address of the output stream
         input_addresses (str): the addresses of the input streams
+        binarize_mode (str): the method to binarize the signal, can be "mean" or "median"
         **kwargs:
+            output_suffix (str): suffix to append to the output address
             reduce (str): the reduction method to use, can be one of None, 'mean', 'median', 'max', 'min', 'std'
     """
 
+    NAME = "lempel-ziv"
     SUPPORTED_DTYPES = DataType.ARRAY_1D | DataType.RAW_CHANNEL
 
     def __init__(
         self,
         *input_addresses: str,
-        output_address: str = "lempel-ziv",
-        binarize_mode: str = "mean",
+        binarize_mode: Optional[str] = "mean",
         **kwargs,
     ):
-        super().__init__(output_address, *input_addresses, **kwargs)
+        super().__init__(*input_addresses, **kwargs)
         if binarize_mode == "mean":
             self.binarize_fn = np.mean
         elif binarize_mode == "median":
@@ -179,9 +189,9 @@ class LempelZiv(Processor):
                 f"binarize_mode must be either 'mean' or 'median', not {binarize_mode}"
             )
 
-    def process(self, data: List[Data]) -> List[Data]:
+    def process(self, data: Dict[str, Data]) -> List[Data]:
         result = []
-        for d in data:
+        for d in data.values():
             arr = d.value.data if d.dtype == DataType.RAW_CHANNEL else d.value
 
             # compute Lempel-Ziv complexity

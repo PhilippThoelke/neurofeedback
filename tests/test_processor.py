@@ -3,9 +3,16 @@ import pytest
 from tests.utils import DummyProcessor
 
 
+def test_suffix():
+    p = DummyProcessor(".*", output_suffix="suffix")
+    data = {}
+    p.update(data)
+    assert "/dummy-suffix/feature" in data, "Suffix not added to output address"
+
+
 def test_duplicate_output_address():
-    p1 = DummyProcessor(".*", output_address="dummy")
-    p2 = DummyProcessor(".*", output_address="dummy")
+    p1 = DummyProcessor(".*")
+    p2 = DummyProcessor(".*")
 
     data = dict()
     p1.update(data)
@@ -15,11 +22,12 @@ def test_duplicate_output_address():
 
 
 def test_dirty_duplicate_output_address():
-    p1 = DummyProcessor(".*", output_address="dummy")
-    p2 = DummyProcessor(".*", output_address="dummy")
+    p1 = DummyProcessor(".*")
+    p2 = DummyProcessor(".*")
 
     data = dict()
     p1.update(data)
+    assert "/dummy/feature" in data, "Missing feature from p1"
     data["/dummy/feature"].dirty = True
 
     # this should NOT raise an error because we set p1's output to dirty
@@ -27,7 +35,7 @@ def test_dirty_duplicate_output_address():
 
 
 def test_update_modify():
-    p1 = DummyProcessor(".*", output_address="dummy", illegal_modify_data=True)
+    p = DummyProcessor(".*", illegal_modify_data=True)
     with pytest.raises(RuntimeError):
         # this should raise because we are modifying the data dictionary directly
-        p1.update({})
+        p.update({})

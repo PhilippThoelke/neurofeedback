@@ -7,22 +7,20 @@ from neurofeedback.utils import Data, DataIn, DataType, Processor
 
 
 class DummyProcessor(Processor):
+    NAME = "dummy"
     SUPPORTED_DTYPES = DataType.ALL
 
     def __init__(
-        self,
-        *input_addresses: str,
-        output_address: str = "dummy-processor",
-        reduce: Optional[str] = None,
-        illegal_modify_data: bool = False,
+        self, *input_addresses: str, illegal_modify_data: bool = False, **kwargs
     ):
-        super().__init__(output_address, *input_addresses, reduce=reduce)
+        super().__init__(*input_addresses, **kwargs)
         self.illegal_modify_data = illegal_modify_data
 
-    def process(self, data: List[Data]) -> Data:
+    def process(self, data: Dict[str, Data]) -> Data:
         if self.illegal_modify_data:
             # this should raise an error in the superclass because we are modifying the data
-            data.append(Data("illegal-feature", "dummy-value", DataType.STRING))
+            d = Data("/illegal-feature", "dummy-value", DataType.STRING)
+            data[d.address] = d
         return Data("feature", "dummy-value", DataType.STRING)
 
 
