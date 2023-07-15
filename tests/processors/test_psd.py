@@ -1,7 +1,7 @@
 import pytest
 
-from neurofeedback.data_in import DummyStream
 from neurofeedback.processors import PSD
+from tests.utils import DummyStream
 
 
 @pytest.mark.parametrize("band", ["delta", "theta", "alpha", "beta", "gamma"])

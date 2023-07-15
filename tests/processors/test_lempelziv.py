@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from antropy import lziv_complexity
 
-from neurofeedback.data_in import DummyStream
 from neurofeedback.processors import LempelZiv
+from tests.utils import DummyStream
 
 
 @pytest.mark.parametrize("binarize", ["mean", "median"])
