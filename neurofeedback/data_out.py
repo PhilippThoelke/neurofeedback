@@ -1,7 +1,7 @@
-import struct
 import time
+import warnings
 from os.path import exists
-from typing import Dict, List, Union
+from typing import Dict, List
 
 import mne
 import numpy as np
@@ -211,6 +211,9 @@ class OSCStream(DataOut):
             # Create a new message
             msg = OscMessageBuilder(fmt_address(f"{self.address_prefix}/{d.address}"))
             if d.dtype in (DataType.ARRAY_1D | DataType.IMAGE):
+                # TODO: make sure larger messages are handled correctly
+                warnings.warn("Large messages are currently broken.")
+
                 # python-osc automatically handles lists
                 msg.add_arg(d.value.tolist())
             else:
