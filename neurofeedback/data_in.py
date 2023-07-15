@@ -63,7 +63,7 @@ class SerialStream(DataIn):
 
     @property
     def info(self) -> Dict[str, Any]:
-        return dict(ch_names=["serial"], ch_types=["bio"], sfreq=self.sfreq)
+        return dict(ch_names=["serial"], ch_type=["bio"], sfreq=self.sfreq)
 
     def receive(self) -> np.ndarray:
         with self.lock:
@@ -132,7 +132,7 @@ class EEGStream(DataIn):
     @property
     def info(self) -> Dict[str, Any]:
         info = dict(self.client.get_measurement_info())
-        info["ch_types"] = [MNE_CHANNEL_TYPE_MAPPING[ch["kind"]] for ch in info["chs"]]
+        info["ch_type"] = [MNE_CHANNEL_TYPE_MAPPING[ch["kind"]] for ch in info["chs"]]
         return info
 
     def receive(self) -> np.ndarray:

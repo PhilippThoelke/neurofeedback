@@ -76,7 +76,7 @@ class RawData:
     """
     Container for a single raw data channel with info dictionary.
     The info must at minimum contain the sampling frequency ('sfreq') and
-    channel types ('ch_types'). If no channel name is provided, it will
+    channel type ('ch_type'). If no channel name is provided, it will
     automatically be set to 'ch_name': 'ch{ch_idx}'.
 
     If the data is multi-channel, only the channel with index 'ch_idx' will be
@@ -110,14 +110,16 @@ class RawData:
         assert isinstance(self.data, np.ndarray), "RawData.data must be a numpy array"
         assert self.data.ndim == 1, "RawData.data must be a 1D array"
         assert "sfreq" in self.info, "RawData.info must contain 'sfreq' key"
-        assert "ch_types" in self.info, "RawData.info must contain 'ch_types' key"
+        assert "ch_type" in self.info, "RawData.info must contain 'ch_type' key"
 
         # set channel name if not provided
-        if "ch_name" not in self.info:
-            if "ch_names" in self.info:
-                self.info["ch_name"] = self.info["ch_names"]
-            else:
-                self.info["ch_name"] = f"ch{self.ch_idx}"
+        if "ch_name" not in self.info and "ch_names" in self.info:
+            self.info["ch_name"] = self.info["ch_names"]
+            assert isinstance(
+                self.info["ch_name"], str
+            ), "Expected ch_name to be a string"
+        else:
+            self.info["ch_name"] = f"ch{self.ch_idx}"
 
 
 class DataIn(ABC):
@@ -143,6 +145,9 @@ class DataIn(ABC):
     def info(self) -> Dict[str, Any]:
         """
         Property to access information about the data stream.
+        Must at minimum contain
+            - `sfreq`: sampling frequency
+            - `ch_type`: channel type
 
         Returns:
             info (dict): the info dictionary
@@ -169,6 +174,13 @@ class DataIn(ABC):
         Returns:
             n_samples_received (int): the number of new samples received
         """
+        assert (
+            "sfreq" in self.info
+        ), f"{self.__class__.__name__}'s info dictionary doesn't contain 'sfreq'"
+        assert (
+            "ch_type" in self.info
+        ), f"{self.__class__.__name__}'s info dictionary doesn't contain 'ch_type'"
+
         if self.buffer is None:
             # initialize raw buffer
             buffer_size = int(self.info["sfreq"] * self.buffer_seconds)
@@ -201,14 +213,22 @@ class DataIn(ABC):
         if len(self.buffer) < self.buffer.maxlen:
             return -1
 
-        # update data dict
+        # convert raw buffer (deque) to numpy array
         raw_buff = np.asarray(self.buffer)
-        for i, ch in enumerate(self.info["ch_names"]):
-            addr = fmt_address(f"/{self.address}/{ch}")
-            # select single channel from raw data
-            raw = RawData(raw_buff, self.info, i)
+
+        # update data dict
+        if isinstance(self.info["ch_type"], str):
+            # single channel data
+            addr = fmt_address(f"/{self.address}/{raw.info['ch_name']}")
             # insert raw into data dict
-            data[addr] = Data(addr, raw, DataType.RAW_CHANNEL)
+            data[addr] = Data(addr, raw_buff, DataType.RAW)
+        else:
+            for i in range(len(self.info["ch_type"])):
+                # select single channel from raw data
+                raw = RawData(raw_buff, self.info, i)
+                addr = fmt_address(f"/{self.address}/{raw.info['ch_name']}")
+                # insert raw into data dict
+                data[addr] = Data(addr, raw, DataType.RAW_CHANNEL)
         return self.n_samples_received
 
 

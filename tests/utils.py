@@ -50,11 +50,11 @@ class DummyStream(DataIn):
         self.last_receive = None
 
         # fill the buffer so we don't need to wait for the first receive
-        self.update()
+        self.update({})
 
     @property
     def info(self) -> Dict[str, Any]:
-        return dict(sfreq=self.sfreq, ch_types=["misc"] * self.n_channels)
+        return dict(sfreq=self.sfreq, ch_type=["misc"] * self.n_channels)
 
     def receive(self) -> np.ndarray:
         if self.last_receive is None:

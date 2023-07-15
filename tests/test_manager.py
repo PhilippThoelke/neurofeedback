@@ -1,9 +1,10 @@
-from neurofeedback import data_in, data_out, manager, normalization, processors
+from neurofeedback import data_out, manager, normalization, processors
+from tests.utils import DummyStream
 
 
 def test_manager():
     mngr = manager.Manager(
-        {"dummy": data_in.DummyStream()},
+        {"dummy": DummyStream()},
         [processors.LempelZiv()],
         normalization.WelfordsZTransform(),
         [data_out.OSCStream("127.0.0.1", 5005)],
